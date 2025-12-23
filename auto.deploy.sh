@@ -1,4 +1,7 @@
 #!/bin/bash
+git push
+ssh root@hk.banana001.cn "cd /banana/air724 && git pull"
+ssh root@hk.banana001.cn "cd /banana/air724/server && npm install && pm2 restart index"
 
 cd web
 bun run build:pro
