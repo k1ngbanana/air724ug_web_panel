@@ -70,9 +70,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 startCleanupScheduler(60)
 
 // WebSocket服务器（用于设备连接）
-const wss = new WebSocketServer({ 
+const wss = new WebSocketServer({
   server,
-  path: '/websocket'
+  path: '/api/websocket',
 })
 
 // 定期心跳超时检查：每 30 秒检查一次 last_seen，超过 HEARTBEAT_TIMEOUT 秒无心跳就标记离线
@@ -80,23 +80,27 @@ const HEARTBEAT_TIMEOUT = 150 // 150秒无心跳则标记为离线（与 jam/ser
 setInterval(() => {
   try {
     // 查找超时的在线设备
-    const timeoutDevices = db.prepare(`
+    const timeoutDevices = db
+      .prepare(
+        `
       SELECT imei FROM devices 
       WHERE connected = 1 
       AND datetime(last_seen, '+${HEARTBEAT_TIMEOUT} seconds') < datetime('now')
-    `).all()
-    
+    `
+      )
+      .all()
+
     if (timeoutDevices.length > 0) {
       console.log(`⏰ 检测到 ${timeoutDevices.length} 个设备心跳超时，标记为离线`)
-      
+
       // 批量更新为离线状态，并记录离线时间
       const stmt = db.prepare(`
         UPDATE devices 
         SET connected = 0, last_seen = datetime('now')
         WHERE imei = ?
       `)
-      
-      timeoutDevices.forEach(device => {
+
+      timeoutDevices.forEach((device) => {
         stmt.run(device.imei)
         console.log(`  📴 设备 ${device.imei} 已标记为离线`)
       })
@@ -109,27 +113,28 @@ setInterval(() => {
 wss.on('connection', (ws, req) => {
   const clientIp = req.socket.remoteAddress
   console.log(`📱 新设备连接: ${clientIp}`)
-  
+
   let deviceImei = null
-  
+
   ws.on('message', (data) => {
     try {
       const message = JSON.parse(data.toString())
       console.log('📨 收到消息:', message)
-      
+
       // 处理设备注册和上线（兼容 'register' 和 'online' 两种类型）
       if (message.type === 'register' || message.type === 'online') {
         deviceImei = message.imei
         const { phone, iccid, signal, operator, mac, temperature, voltage } = message
-        
+
         console.log(`📝 处理设备${message.type === 'online' ? '上线' : '注册'}: ${deviceImei}`)
-        
+
         // 检查设备是否已存在
         const existingDevice = db.prepare('SELECT * FROM devices WHERE imei = ?').get(deviceImei)
-        
+
         if (existingDevice) {
           // 更新设备状态
-          db.prepare(`
+          db.prepare(
+            `
             UPDATE devices 
             SET connected = 1,
                 last_seen = datetime('now'),
@@ -141,7 +146,8 @@ wss.on('connection', (ws, req) => {
                 temperature = COALESCE(?, temperature),
                 voltage = COALESCE(?, voltage)
             WHERE imei = ?
-          `).run(
+          `
+          ).run(
             phone || existingDevice.phone,
             iccid || existingDevice.iccid,
             signal || existingDevice.signal,
@@ -149,24 +155,28 @@ wss.on('connection', (ws, req) => {
             mac || existingDevice.mac || null,
             temperature || existingDevice.temperature,
             voltage || existingDevice.voltage,
-            deviceImei,
+            deviceImei
           )
           console.log(`✅ 设备已更新: ${deviceImei} (手机号: ${phone || existingDevice.phone})`)
         } else {
           // 添加新设备
-          db.prepare(`
+          db.prepare(
+            `
             INSERT INTO devices (imei, phone, iccid, signal, operator, mac, temperature, voltage, connected, last_seen)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
-          `).run(deviceImei, phone, iccid, signal, operator, mac || null, temperature || null, voltage || null)
+          `
+          ).run(deviceImei, phone, iccid, signal, operator, mac || null, temperature || null, voltage || null)
           console.log(`✅ 新设备已注册: ${deviceImei} (手机号: ${phone})`)
         }
-        
+
         deviceConnections.set(deviceImei, ws)
-        
-        ws.send(JSON.stringify({
-          type: message.type === 'online' ? 'online_success' : 'register_success',
-          message: message.type === 'online' ? '上线成功' : '注册成功'
-        }))
+
+        ws.send(
+          JSON.stringify({
+            type: message.type === 'online' ? 'online_success' : 'register_success',
+            message: message.type === 'online' ? '上线成功' : '注册成功',
+          })
+        )
       }
 
       // 兼容处理设备状态上报（device_status），同样视为“在线/心跳”
@@ -179,20 +189,7 @@ wss.on('connection', (ws, req) => {
           deviceImei = imei
 
           // 兼容不同字段名：oper/rsrp/vbatt 等
-          const {
-            phone,
-            iccid,
-            signal,
-            operator,
-            oper,
-            mac,
-            temperature,
-            voltage,
-            ver,
-            uptime,
-            rsrp,
-            vbatt,
-          } = message
+          const { phone, iccid, signal, operator, oper, mac, temperature, voltage, ver, uptime, rsrp, vbatt } = message
 
           const existingDevice = db.prepare('SELECT * FROM devices WHERE imei = ?').get(deviceImei)
 
@@ -207,7 +204,7 @@ wss.on('connection', (ws, req) => {
 
           // 解析电压：优先使用数值 voltage，其次从字符串 voltage/vbatt 中提取浮点数（如 "3.944 V" -> 3.944）
           let parsedVoltage = voltage
-          const voltageSource = typeof voltage === 'string' ? voltage : (typeof vbatt === 'string' ? vbatt : null)
+          const voltageSource = typeof voltage === 'string' ? voltage : typeof vbatt === 'string' ? vbatt : null
           if (parsedVoltage == null && voltageSource) {
             const m = voltageSource.match(/\d+(?:\.\d+)?/)
             if (m) {
@@ -230,15 +227,16 @@ wss.on('connection', (ws, req) => {
           // 解析运行时长：uptime 形如 "HH:MM:SS"，转为总秒数存入 runtime
           let parsedRuntime = null
           if (typeof uptime === 'string') {
-            const parts = uptime.split(':').map(p => parseInt(p, 10))
-            if (parts.length === 3 && parts.every(n => !Number.isNaN(n))) {
+            const parts = uptime.split(':').map((p) => parseInt(p, 10))
+            if (parts.length === 3 && parts.every((n) => !Number.isNaN(n))) {
               const [h, m, s] = parts
               parsedRuntime = h * 3600 + m * 60 + s
             }
           }
 
           if (existingDevice) {
-            db.prepare(`
+            db.prepare(
+              `
               UPDATE devices 
               SET connected = 1,
                   last_seen = datetime('now'),
@@ -253,7 +251,8 @@ wss.on('connection', (ws, req) => {
                   ver = COALESCE(?, ver),
                   ip = COALESCE(?, ip)
               WHERE imei = ?
-            `).run(
+            `
+            ).run(
               phone || null,
               iccid || null,
               parsedSignal != null ? parsedSignal : existingDevice.signal,
@@ -264,14 +263,16 @@ wss.on('connection', (ws, req) => {
               parsedRuntime != null ? parsedRuntime : existingDevice.runtime,
               ver || existingDevice.ver || null,
               clientIp || existingDevice.ip || null,
-              deviceImei,
+              deviceImei
             )
             console.log(`✅ device_status 更新设备: ${deviceImei} (手机号: ${phone || existingDevice.phone || '未知'}, ver: ${ver || '未知'}, uptime: ${uptime || '未知'})`)
           } else {
-            db.prepare(`
+            db.prepare(
+              `
               INSERT INTO devices (imei, phone, iccid, signal, operator, mac, temperature, voltage, runtime, ver, ip, connected, last_seen)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
-            `).run(
+            `
+            ).run(
               deviceImei,
               phone || null,
               iccid || null,
@@ -282,7 +283,7 @@ wss.on('connection', (ws, req) => {
               parsedVoltage != null ? parsedVoltage : null,
               parsedRuntime != null ? parsedRuntime : null,
               ver || null,
-              clientIp || null,
+              clientIp || null
             )
             console.log(`✅ device_status 新设备已注册: ${deviceImei} (手机号: ${phone || '未知'}, ver: ${ver || '未知'}, uptime: ${uptime || '未知'})`)
           }
@@ -290,51 +291,56 @@ wss.on('connection', (ws, req) => {
           deviceConnections.set(deviceImei, ws)
         }
       }
-      
+
       // 处理设备心跳
       if (message.type === 'heartbeat') {
-        db.prepare(`
+        db.prepare(
+          `
           UPDATE devices 
           SET last_seen = datetime('now'), signal = ?, connected = 1
           WHERE imei = ?
-        `).run(message.signal || null, deviceImei)
-        
-        ws.send(JSON.stringify({
-          type: 'heartbeat_ack'
-        }))
+        `
+        ).run(message.signal || null, deviceImei)
+
+        ws.send(
+          JSON.stringify({
+            type: 'heartbeat_ack',
+          })
+        )
       }
-      
+
       // 处理设备数据上报
       if (message.type === 'data') {
         console.log(`📊 设备 ${deviceImei} 数据:`, message.data)
         // 这里可以存储设备数据到数据库
       }
-      
+
       // 处理任务响应（兼容 task_response 和 task_result 两种类型）
       if (message.type === 'task_response' || message.type === 'task_result') {
         console.log(`📬 收到任务响应: ${message.taskId}`)
         handleTaskResponse(message)
       }
-      
     } catch (error) {
       console.error('❌ 消息处理错误:', error)
     }
   })
-  
+
   ws.on('close', () => {
     if (deviceImei) {
       console.log(`📴 设备断开: ${deviceImei}`)
       deviceConnections.delete(deviceImei)
-      
+
       // 更新设备离线状态
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE devices 
         SET connected = 0, last_seen = datetime('now')
         WHERE imei = ?
-      `).run(deviceImei)
+      `
+      ).run(deviceImei)
     }
   })
-  
+
   ws.on('error', (error) => {
     console.error('❌ WebSocket错误:', error)
   })
