@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  server:
+    container_name: air724ug-server
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: air724ug-server:latest
+    ports:
+      - "9527:9527"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=9527
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9527"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  data:
+    driver: local

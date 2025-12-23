@@ -1,0 +1,659 @@
+import { defineMock } from 'vite-plugin-mock-dev-server'
+import { builder } from '../util'
+
+// 存储注册的用户（模拟数据库）
+const registeredUsers: Record<string, { password: string; role: string; uid: number; email?: string; needActivation: boolean; createdAt: string; status: string }> = {
+  'admin': { password: 'admin123', role: 'admin', uid: 1, needActivation: false, createdAt: '2024-01-01T00:00:00.000Z', status: 'active' },
+  'user1': { password: 'user123', role: 'user', uid: 2, needActivation: false, email: 'user1@example.com', createdAt: '2024-02-15T10:30:00.000Z', status: 'active' },
+  'user2': { password: 'user123', role: 'user', uid: 3, needActivation: false, email: 'user2@example.com', createdAt: '2024-03-20T14:20:00.000Z', status: 'active' },
+  'testuser': { password: 'test123', role: 'user', uid: 4, needActivation: false, email: 'test@example.com', createdAt: '2024-10-01T08:15:00.000Z', status: 'active' },
+  '123456': { password: '123456', role: 'user', uid: 100, needActivation: false, email: '', createdAt: '2024-11-09T14:20:00.000Z', status: 'active' },
+}
+
+let nextUserId = 101 // 新注册用户的起始ID
+
+// 存储激活码（模拟数据库）
+const activationKeys: Array<{
+  _id: string
+  code: string
+  description: string
+  createdAt: string
+  expiresAt?: string
+  status: string
+  maxUses: number
+  usedCount: number
+  usedBy?: string
+  usedAt?: string
+}> = [
+  {
+    _id: 'key1',
+    code: 'ACTIVATE-2024-A1B2C3D4',
+    description: '2024年11月批次',
+    createdAt: '2024-11-01T10:00:00.000Z',
+    expiresAt: '2025-11-01T10:00:00.000Z',
+    status: 'active',
+    maxUses: 10,
+    usedCount: 3,
+    usedBy: 'user1',
+    usedAt: '2024-11-05T14:30:00.000Z',
+  },
+  {
+    _id: 'key2',
+    code: 'ACTIVATE-2024-E5F6G7H8',
+    description: '测试用激活码',
+    createdAt: '2024-10-15T14:30:00.000Z',
+    expiresAt: '2024-12-31T23:59:59.000Z',
+    status: 'active',
+    maxUses: 1,
+    usedCount: 0,
+  },
+  {
+    _id: 'key3',
+    code: 'ACTIVATE-2024-I9J0K1L2',
+    description: '已禁用的激活码',
+    createdAt: '2024-09-20T09:15:00.000Z',
+    status: 'disabled',
+    maxUses: 5,
+    usedCount: 5,
+    usedBy: 'user2',
+    usedAt: '2024-10-01T08:20:00.000Z',
+  },
+]
+
+// 设备列表（等待WebSocket连接的真实设备）
+const devices: Array<{
+  imei: string
+  phone: string
+  connected: boolean
+  lastSeen: number
+  iccid?: string
+  signal?: number
+  operator?: string
+  owner: string
+}> = []
+
+// 用于存储token和用户名的映射（模拟JWT解析）
+const tokenUserMap: Record<string, string> = {}
+
+export default defineMock([
+  {
+    url: '/api/auth/login',
+    delay: 500,
+    body: ({ body }) => {
+      const { username, password } = body
+      
+      // 使用注册用户列表验证
+      const validUsers = registeredUsers
+      
+      // 验证用户名和密码
+      if (validUsers[username] && validUsers[username].password === password) {
+        const user = validUsers[username]
+        const token = `mock-${user.role}-token-` + Date.now()
+        
+        // 保存token和用户名的映射
+        tokenUserMap[token] = username
+        console.log('用户登录:', username, 'Token:', token.substring(0, 30) + '...')
+        
+        return {
+          code: 0,
+          data: {
+            token: token,
+            user: {
+              uid: user.uid,
+              username: username,
+              name: username,
+              role: user.role,
+              status: user.needActivation ? 'inactive' : 'active',
+              needActivation: user.needActivation,
+              email: user.email,
+              avatar: user.role === 'admin' ? 'https://iconfont.alicdn.com/p/user/eZQFvSX6g8f1/f0d9fd95-a5f0-474d-98b0-d51e8450f2cf.png' : undefined,
+            },
+          },
+          msg: '登录成功',
+        }
+      } else {
+        return {
+          code: 1,
+          msg: '用户名或密码错误',
+        }
+      }
+    },
+  },
+  {
+    url: '/api/user/me',
+    delay: 100,
+    body: () => {
+      return {
+        code: 0,
+        data: {
+          uid: 1,
+          name: 'admin',
+          avatar: 'https://iconfont.alicdn.com/p/user/eZQFvSX6g8f1/f0d9fd95-a5f0-474d-98b0-d51e8450f2cf.png',
+        },
+        msg: 'success',
+      }
+    },
+  },
+  {
+    url: '/api/userPool',
+    delay: 300,
+    body: ({ headers }) => {
+      // 从请求头获取token
+      const token = headers?.authorization?.replace('Bearer ', '') || ''
+      
+      console.log('========== 获取设备列表 ==========')
+      console.log('Token:', token)
+      console.log('TokenUserMap:', tokenUserMap)
+      
+      // 从tokenUserMap获取用户名，如果找不到，尝试从token中解析
+      let currentUser = tokenUserMap[token] || ''
+      let isAdmin = false
+      
+      // 如果tokenUserMap中没有，尝试从token中解析（兼容服务器重启的情况）
+      if (!currentUser && token) {
+        if (token.includes('admin-token')) {
+          currentUser = 'admin'
+          isAdmin = true
+          // 重新保存映射
+          tokenUserMap[token] = 'admin'
+          console.log('⚠️ 从token恢复管理员身份')
+        } else if (token.includes('user-token')) {
+          // 普通用户无法从token恢复身份，返回空列表
+          console.log('⚠️ 无法从token恢复用户身份，请重新登录')
+          return []
+        }
+      } else {
+        isAdmin = currentUser === 'admin'
+      }
+      
+      console.log('当前用户:', currentUser, '是否管理员:', isAdmin)
+      console.log('所有设备:', devices.map(d => ({ imei: d.imei, owner: d.owner })))
+      
+      // 管理员可以看到所有设备（包括owner信息）
+      if (isAdmin) {
+        console.log('✅ 管理员可以看到所有设备:', devices.length, '个')
+        const result = devices.map(device => ({
+          ...device,
+          boundUser: device.owner || '未绑定' // 添加绑定用户字段
+        }))
+        console.log('返回设备数量:', result.length)
+        return result
+      }
+      
+      // 普通用户只能看到自己绑定的设备（owner === currentUser 且不为空）
+      const userDevices = devices.filter(device => device.owner === currentUser && device.owner !== '')
+      console.log(`👤 用户 ${currentUser || '未知用户'} 的设备数量:`, userDevices.length, '个')
+      console.log('返回的设备IMEI:', userDevices.map(d => d.imei))
+      
+      // 返回设备列表（移除owner字段）
+      return userDevices.map(({ owner, ...device }) => device)
+    },
+  },
+  {
+    url: '/api/user/logout',
+    delay: 500,
+    body: () => {
+      return {
+        code: 0,
+        msg: 'success',
+      }
+    },
+  },
+  {
+    url: '/api/device/unbind',
+    method: 'POST',
+    delay: 500,
+    body: ({ body, headers }) => {
+      const { imei } = body
+      const token = headers?.authorization?.replace('Bearer ', '') || ''
+      
+      if (!imei) {
+        return {
+          code: 1,
+          msg: '请输入设备IMEI',
+        }
+      }
+      
+      // 从token获取用户名
+      const currentUser = tokenUserMap[token] || ''
+      
+      if (!currentUser) {
+        return {
+          code: 1,
+          msg: '请先登录',
+        }
+      }
+      
+      // 查找设备
+      const device = devices.find(d => d.imei === imei)
+      
+      if (!device) {
+        return {
+          code: 1,
+          msg: '设备不存在',
+        }
+      }
+      
+      if (device.owner !== currentUser) {
+        return {
+          code: 1,
+          msg: '只能解绑自己的设备',
+        }
+      }
+      
+      // 解绑设备
+      device.owner = ''
+      console.log(`设备 ${imei} 已从用户 ${currentUser} 解绑`)
+      
+      return {
+        code: 0,
+        msg: '设备解绑成功',
+      }
+    },
+  },
+  {
+    url: '/api/device/bind',
+    method: 'POST',
+    delay: 500,
+    body: ({ body, headers }) => {
+      const { imei } = body
+      const token = headers?.authorization?.replace('Bearer ', '') || ''
+      
+      if (!imei) {
+        return {
+          code: 1,
+          msg: '请输入设备IMEI',
+        }
+      }
+      
+      // 从token获取用户名
+      const currentUser = tokenUserMap[token] || ''
+      
+      if (!currentUser) {
+        return {
+          code: 1,
+          msg: '请先登录',
+        }
+      }
+      
+      // 管理员不能绑定设备
+      if (currentUser === 'admin') {
+        return {
+          code: 1,
+          msg: '管理员无需绑定设备',
+        }
+      }
+      
+      // 查找设备
+      const device = devices.find(d => d.imei === imei)
+      
+      if (!device) {
+        return {
+          code: 1,
+          msg: '设备不存在',
+        }
+      }
+      
+      if (device.owner && device.owner !== '') {
+        return {
+          code: 1,
+          msg: `该设备已被用户 ${device.owner} 绑定`,
+        }
+      }
+      
+      // 绑定设备到当前用户
+      device.owner = currentUser
+      console.log(`设备 ${imei} 已绑定到用户 ${currentUser}`)
+      
+      return {
+        code: 0,
+        data: {
+          imei: device.imei,
+          phone: device.phone,
+          operator: device.operator,
+        },
+        msg: '设备绑定成功',
+      }
+    },
+  },
+  {
+    url: '/api/user/email-code',
+    delay: 1000,
+    body: () => {
+      const code = '123456'
+      return builder(code)
+    },
+  },
+  {
+    url: '/api/user/reset-password',
+    delay: 1000,
+    body: () => {
+      const res = true
+      return builder(res)
+    },
+  },
+  {
+    url: '/api/user/register',
+    delay: 1000,
+    body: () => {
+      const res = true
+      return builder(res)
+    },
+  },
+  {
+    url: '/api/auth/register',
+    delay: 500,
+    body: ({ body }) => {
+      const { username, password, email } = body
+      
+      if (!username || !password) {
+        return {
+          code: 1,
+          msg: '用户名和密码不能为空',
+        }
+      }
+      
+      // 检查用户名是否已存在
+      if (registeredUsers[username]) {
+        return {
+          code: 1,
+          msg: '用户名已存在',
+        }
+      }
+      
+      // 添加新用户到注册列表
+      registeredUsers[username] = {
+        password: password,
+        role: 'user',
+        uid: nextUserId++,
+        email: email,
+        needActivation: true, // 新注册用户需要激活
+        createdAt: new Date().toISOString(),
+        status: 'inactive',
+      }
+      
+      console.log('新用户注册成功:', username, '当前用户列表:', Object.keys(registeredUsers))
+      
+      // 模拟注册成功
+      return {
+        code: 0,
+        data: {
+          username: username,
+          email: email,
+        },
+        msg: '注册成功，请登录后使用激活码激活账号',
+      }
+    },
+  },
+  {
+    url: '/api/auth/activate',
+    delay: 500,
+    body: ({ body }) => {
+      const { activationCode } = body
+      
+      // 模拟激活码验证（这里简化处理，实际应该验证激活码是否有效）
+      if (activationCode && activationCode.length >= 8) {
+        // 获取当前登录用户（从token或请求头中获取，这里简化处理）
+        // 实际应该从请求头的Authorization中解析用户
+        // 这里我们假设激活的是最后注册的用户
+        
+        // 将所有需要激活的用户都激活（简化处理）
+        Object.keys(registeredUsers).forEach(username => {
+          if (registeredUsers[username].needActivation) {
+            registeredUsers[username].needActivation = false
+            console.log('用户激活成功:', username)
+          }
+        })
+        
+        return {
+          code: 0,
+          data: {
+            status: 'active',
+          },
+          msg: '激活成功',
+        }
+      } else {
+        return {
+          code: 1,
+          msg: '激活码无效或格式不正确',
+        }
+      }
+    },
+  },
+  {
+    url: '/api/admin/users',
+    method: 'GET',
+    delay: 300,
+    body: () => {
+      // 返回用户列表（不包含当前登录的admin，避免自己管理自己）
+      // 从registeredUsers动态生成列表
+      const allUsers = Object.keys(registeredUsers)
+      console.log('获取用户列表，总用户数:', allUsers.length, '用户列表:', allUsers)
+      
+      const userList = allUsers
+        .filter(username => username !== 'admin') // 排除admin
+        .map(username => {
+          const user = registeredUsers[username]
+          return {
+            _id: user.uid.toString(),
+            username: username,
+            email: user.email || '',
+            role: user.role,
+            status: user.status,
+            createdAt: user.createdAt,
+            metadata: {
+              lastLogin: new Date(Date.now() - Math.random() * 86400000).toISOString(),
+              loginCount: Math.floor(Math.random() * 100),
+            },
+          }
+        })
+      
+      console.log('返回用户列表（不含admin）:', userList.length, '个用户')
+      
+      return {
+        success: true,
+        data: userList,
+      }
+    },
+  },
+  {
+    url: '/api/admin/users',
+    method: 'POST',
+    delay: 500,
+    body: ({ body }) => {
+      const { username, password, email, role } = body
+      
+      if (!username || !password) {
+        return {
+          success: false,
+          message: '用户名和密码不能为空',
+        }
+      }
+      
+      // 模拟添加用户成功
+      return {
+        success: true,
+        data: {
+          _id: Date.now().toString(),
+          username: username,
+          email: email || '',
+          role: role || 'user',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+        },
+        message: '添加用户成功',
+      }
+    },
+  },
+  {
+    url: '/api/admin/users/:userId',
+    method: 'DELETE',
+    delay: 500,
+    body: () => {
+      // 模拟删除用户成功
+      return {
+        success: true,
+        message: '删除用户成功',
+      }
+    },
+  },
+  {
+    url: '/api/admin/users/:userId/status',
+    method: 'PUT',
+    delay: 500,
+    body: ({ body }) => {
+      const { status } = body
+      
+      // 模拟更新用户状态成功
+      return {
+        success: true,
+        data: {
+          status: status,
+        },
+        message: '更新状态成功',
+      }
+    },
+  },
+  {
+    url: '/api/admin/activation-keys',
+    method: 'GET',
+    delay: 300,
+    body: () => {
+      // 返回激活码列表（从全局存储读取）
+      return {
+        success: true,
+        data: activationKeys,
+      }
+    },
+  },
+  {
+    url: '/api/admin/activation-keys',
+    method: 'POST',
+    delay: 500,
+    body: ({ body }) => {
+      const { description, expiresIn, maxUses } = body
+      
+      if (!description) {
+        return {
+          success: false,
+          message: '请填写激活码描述',
+        }
+      }
+      
+      // 生成随机激活码
+      const randomCode = 'ACTIVATE-' + new Date().getFullYear() + '-' + 
+        Math.random().toString(36).substring(2, 6).toUpperCase() + 
+        Math.random().toString(36).substring(2, 6).toUpperCase()
+      
+      const expiresAt = expiresIn > 0 ? new Date(Date.now() + expiresIn * 24 * 60 * 60 * 1000).toISOString() : undefined
+      
+      // 创建新激活码
+      const newKey = {
+        _id: Date.now().toString(),
+        code: randomCode,
+        description: description,
+        createdAt: new Date().toISOString(),
+        expiresAt: expiresAt,
+        status: 'active',
+        maxUses: maxUses || 1,
+        usedCount: 0,
+      }
+      
+      // 添加到激活码列表
+      activationKeys.push(newKey)
+      
+      console.log('新激活码生成:', randomCode, '当前激活码数量:', activationKeys.length)
+      
+      // 模拟生成激活码成功
+      return {
+        success: true,
+        data: newKey,
+        message: '激活码生成成功',
+      }
+    },
+  },
+  {
+    url: '/api/admin/activation-keys/:keyId',
+    method: 'DELETE',
+    delay: 500,
+    body: () => {
+      // 模拟删除激活码成功
+      return {
+        success: true,
+        message: '删除激活码成功',
+      }
+    },
+  },
+  {
+    url: '/api/admin/activation-keys/:keyId/status',
+    method: 'PATCH',
+    delay: 500,
+    body: ({ body }) => {
+      const { status } = body
+      
+      // 模拟更新激活码状态成功
+      return {
+        success: true,
+        data: {
+          status: status,
+        },
+        message: '更新状态成功',
+      }
+    },
+  },
+  {
+    url: '/api/admin/account/update',
+    method: 'POST',
+    delay: 500,
+    body: ({ body, headers }) => {
+      const { currentPassword, newPassword, email } = body
+      const token = headers?.authorization?.replace('Bearer ', '') || ''
+      
+      // 从token获取当前用户
+      const currentUser = tokenUserMap[token] || 'admin'
+      
+      if (!registeredUsers[currentUser]) {
+        return {
+          success: false,
+          message: '用户不存在',
+        }
+      }
+      
+      // 如果要修改密码，验证当前密码
+      if (newPassword) {
+        if (!currentPassword) {
+          return {
+            success: false,
+            message: '请输入当前密码',
+          }
+        }
+        
+        if (registeredUsers[currentUser].password !== currentPassword) {
+          return {
+            success: false,
+            message: '当前密码错误',
+          }
+        }
+        
+        // 更新密码
+        registeredUsers[currentUser].password = newPassword
+        console.log(`用户 ${currentUser} 密码已更新`)
+      }
+      
+      // 更新邮箱
+      if (email !== undefined) {
+        registeredUsers[currentUser].email = email
+        console.log(`用户 ${currentUser} 邮箱已更新为: ${email}`)
+      }
+      
+      // 返回更新后的信息
+      return {
+        success: true,
+        data: {
+          email: registeredUsers[currentUser].email,
+        },
+        message: '保存成功',
+      }
+    },
+  },
+])

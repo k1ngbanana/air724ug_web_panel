@@ -1,0 +1,53 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--van-gray-1);
+  font-size: var(--van-font-size-lg);
+  color-scheme: light;
+}
+
+html.dark {
+  background: #222;
+  color-scheme: dark;
+}
+
+#app {
+  height: 100%;
+  position: relative;
+}
+
+::-webkit-scrollbar {
+  width: 0;
+  background: transparent;
+}
+
+/* 修复白色文字显示问题 */
+.text-white,
+[text-white=""] {
+  color: white !important;
+}
+
+/* 确保蓝色背景按钮的白色文字可见 */
+.bg-gradient-to-r.from-blue-500,
+.bg-gradient-to-r.from-purple-500 {
+  color: white !important;
+  
+  span, div {
+    color: white !important;
+  }
+}
+
+/* 强制设置渐变背景 */
+.bg-gradient-to-br.from-blue-500.to-blue-600 {
+  background: linear-gradient(to bottom right, #3b82f6, #2563eb) !important;
+  color: white !important;
+}
+
+.bg-gradient-to-br.from-blue-400.to-purple-500 {
+  background: linear-gradient(to bottom right, #60a5fa, #a855f7) !important;
+  color: white !important;
+}
