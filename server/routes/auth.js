@@ -4,31 +4,53 @@ import { tokenUserMap } from '../index.js'
 export function setupAuthRoutes(app) {
   // 用户登录
   app.post('/api/auth/login', (req, res) => {
-    // 简化为单用户模式：任何账号密码都登录为 admin
-    const username = 'admin'
-    const role = 'admin'
+    const { username, password } = req.body || {}
 
-    const token = `token-${username}-${role}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    tokenUserMap.set(token, username)
+    if (!username || !password) {
+      return res.json({ code: 1, success: false, msg: '用户名和密码不能为空' })
+    }
 
-    console.log(`✅ 单用户模式登录: ${username} (${role})`)
+    try {
+      // 从 users 表中查询用户
+      const user = db.prepare(`
+        SELECT id, username, password, email, role, status, need_activation AS needActivation, expires_at AS expiresAt
+        FROM users
+        WHERE username = ?
+      `).get(username)
 
-    res.json({
-      code: 0,
-      data: {
-        token,
-        userInfo: {
-          username,
-          role,
-          email: null,
-          uid: 1,
-          needActivation: false,
-          status: 'active',
-          expiresAt: null
-        }
-      },
-      msg: '登录成功（单用户模式）'
-    })
+      // 用户不存在或密码不匹配
+      if (!user || user.password !== password) {
+        return res.json({ code: 1, success: false, msg: '用户名或密码错误' })
+      }
+
+      // 登录成功，生成 token
+      const role = user.role || 'user'
+      const token = `token-${user.username}-${role}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      tokenUserMap.set(token, user.username)
+
+      console.log(`✅ 用户登录成功: ${user.username} (${role})`)
+
+      res.json({
+        code: 0,
+        success: true,
+        data: {
+          token,
+          userInfo: {
+            username: user.username,
+            role,
+            email: user.email,
+            uid: user.id,
+            needActivation: !!user.needActivation,
+            status: user.status,
+            expiresAt: user.expiresAt,
+          },
+        },
+        msg: '登录成功',
+      })
+    } catch (error) {
+      console.error('用户登录失败:', error)
+      res.json({ code: 1, success: false, msg: '登录失败，请稍后重试' })
+    }
   })
   
   // 用户注册

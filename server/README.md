@@ -247,9 +247,21 @@ ws://your-server:9527/websocket
 ### 认证相关
 
 - `POST /api/auth/login` - 用户登录
+- `POST /api/auth/register` - 用户注册
+- `POST /api/auth/activate` - 激活账号
+
 ### 设备管理
 
 - `GET /api/userPool` - 获取设备列表
+- `POST /api/device/bind` - 绑定设备
+- `POST /api/device/unbind` - 解绑设备
+
+### 管理员功能
+
+- `GET /api/admin/users` - 获取用户列表
+- `GET /api/admin/activation-keys` - 获取激活码列表
+- `POST /api/admin/activation-keys` - 创建激活码
+- `POST /api/admin/account/update` - 更新账号信息
 
 ## 💾 数据备份
 
