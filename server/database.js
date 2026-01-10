@@ -22,7 +22,7 @@ db.pragma('foreign_keys = ON')
 export function initDatabase() {
   console.log('📦 初始化数据库...')
   console.log('📍 数据库位置:', dbPath)
-  
+
   // 创建用户表（单用户模式仍保留，用于 Logo 等少量功能的外键引用）
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -37,7 +37,7 @@ export function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `)
-  
+
   // 创建设备表
   db.exec(`
     CREATE TABLE IF NOT EXISTS devices (
@@ -53,7 +53,7 @@ export function initDatabase() {
       FOREIGN KEY (owner) REFERENCES users(username) ON DELETE SET NULL
     )
   `)
-  
+
   // 为已存在的设备表添加 created_at 字段（如果不存在）
   try {
     db.exec(`ALTER TABLE devices ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP`)
@@ -69,7 +69,7 @@ export function initDatabase() {
   } catch (e) {
     // 字段已存在，忽略错误
   }
-  
+
   // 为已存在的设备表添加温度字段（如果不存在）
   try {
     db.exec(`ALTER TABLE devices ADD COLUMN temperature REAL`)
@@ -109,7 +109,7 @@ export function initDatabase() {
   } catch (e) {
     // 字段已存在，忽略错误
   }
-  
+
   // 清理多用户/激活码相关旧表（单用户模式不再使用）
   db.exec(`DROP TABLE IF EXISTS device_whitelist`)
   db.exec(`DROP TABLE IF EXISTS activation_usage`)
@@ -137,7 +137,7 @@ export function initDatabase() {
       FOREIGN KEY (imei) REFERENCES devices(imei)
     )
   `)
-  
+
   // 为已存在的表添加 expires_at 字段（如果不存在）
   try {
     db.exec(`ALTER TABLE voice_records ADD COLUMN expires_at DATETIME`)
@@ -145,10 +145,32 @@ export function initDatabase() {
   } catch (e) {
     // 字段已存在，忽略错误
   }
-  
+
   // 单用户最小化版本不再使用 logo 配置表，清理历史遗留表
   db.exec(`DROP TABLE IF EXISTS logo_configs`)
 
-  // 单用户模式下不再自动插入默认用户/测试账号，登录逻辑由 auth.js 直接固定为 admin
+  // 检查并创建默认管理员账号
+  const defaultAdminUser = process.env.DEFAULT_ADMIN_USER
+  const defaultAdminPassword = process.env.DEFAULT_ADMIN_PASSWORD
+
+  if (defaultAdminUser && defaultAdminPassword) {
+    try {
+      // 检查用户是否已存在
+      const user = db.prepare('SELECT * FROM users WHERE username = ?').get(defaultAdminUser)
+
+      if (!user) {
+        db.prepare(`
+          INSERT INTO users (username, password, role, status, email)
+          VALUES (?, ?, 'admin', 'active', 'admin@example.com')
+        `).run(defaultAdminUser, defaultAdminPassword)
+        console.log(`✅ 已创建默认管理员账号: ${defaultAdminUser}`)
+      } else {
+        console.log(`ℹ️ 默认管理员账号已存在: ${defaultAdminUser}`)
+      }
+    } catch (error) {
+      console.error('❌ 创建默认管理员账号失败:', error)
+    }
+  }
+
   console.log('✅ 数据库初始化完成')
 }

@@ -3,7 +3,7 @@ import process from 'node:process'
 import { loadEnv } from 'vite'
 import type { ConfigEnv, UserConfig } from 'vite'
 
-import { include, exclude } from './build/vite/optimize.js'
+import { exclude, include } from './build/vite/optimize.js'
 import { createVitePlugins } from './build/vite/index.js'
 
 export default ({ mode }: ConfigEnv): UserConfig => {
@@ -22,7 +22,7 @@ export default ({ mode }: ConfigEnv): UserConfig => {
           target: 'http://localhost:9527',
           ws: false,
           changeOrigin: true,
-          rewrite: path => path.replace(/^\/api/, ''),
+          // rewrite: path => path.replace(/^\/api/, ''),
         },
       },
     },

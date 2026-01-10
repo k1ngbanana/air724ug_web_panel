@@ -11,6 +11,11 @@ export function setupAuthRoutes(app) {
     }
 
     try {
+      const users = db.prepare(`
+            SELECT id, username, password, email, role, status, need_activation AS needActivation, expires_at AS expiresAt
+        FROM users`).all()
+      // console.log(users)
+
       // 从 users 表中查询用户
       const user = db.prepare(`
         SELECT id, username, password, email, role, status, need_activation AS needActivation, expires_at AS expiresAt
@@ -52,34 +57,34 @@ export function setupAuthRoutes(app) {
       res.json({ code: 1, success: false, msg: '登录失败，请稍后重试' })
     }
   })
-  
+
   // 用户注册
   app.post('/api/auth/register', (req, res) => {
     // 单用户模式下关闭注册功能
     res.json({ code: 1, msg: '当前为单用户模式，注册功能已关闭' })
   })
-  
+
   // 激活账号
   app.post('/api/auth/activate', (req, res) => {
     // 单用户模式下关闭激活功能
     res.json({ code: 1, msg: '当前为单用户模式，激活功能已关闭' })
   })
-  
+
   // 验证用户token状态
   app.get('/api/auth/verify', (req, res) => {
     const authHeader = req.headers.authorization
     let token = null
-    
+
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7) // 移除 'Bearer ' 前缀
     } else if (req.headers.token) {
       token = req.headers.token
     }
-    
+
     if (!token) {
       return res.json({ code: 1, msg: 'Token不存在' })
     }
-    
+
     const username = tokenUserMap.get(token) || 'admin'
 
     res.json({
