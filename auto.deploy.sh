@@ -1,7 +1,7 @@
 #!/bin/bash
 git push
 ssh root@ecs_hz_wood.banana001.cn "cd /banana/air724 && git pull"
-ssh root@ecs_hz_wood.banana001.cn "cd /banana/air724/server && bun install && pm2 restart index"
+ssh root@ecs_hz_wood.banana001.cn "export PATH=\$PATH:/root/.bun/bin && cd /banana/air724/server && bun install && pm2 restart index"
 
 cd web
 bun run build:pro
@@ -12,3 +12,5 @@ zip -r dist.zip dist
 ssh root@ecs_hz_wood.banana001.cn "cd /banana/air724-client && rm -rf ./*"
 scp dist.zip root@ecs_hz_wood.banana001.cn:/banana/air724-client
 ssh root@ecs_hz_wood.banana001.cn "cd /banana/air724-client && unzip dist.zip && mv ./dist/* ./ && rm -rf dist.zip && rm -rf dist"
+
+rm -rf dist.zip
